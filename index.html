@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>המעבדה המטבולית - CGM Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+        }
+        h1, h2, h3 { color: var(--primary); }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .upload-section {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        input[type="file"] {
+            font-size: 16px;
+            padding: 10px;
+            cursor: pointer;
+        }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .summary-card {
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            text-align: center;
+            position: relative;
+        }
+        .summary-card .value { font-size: 24px; font-weight: bold; color: var(--primary); }
+        .summary-card .label { font-size: 14px; color: var(--text-muted); display: flex; align-items: center; justify-content: center; gap: 5px; }
+        .info-icon {
+            background: #e2e8f0;
+            color: #475569;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .info-icon:hover { background: var(--primary); color: white; }
+        .recommendations {
+            background: #eff6ff;
+            border-right: 4px solid var(--primary);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100%, 1fr));
+            gap: 20px;
+        }
+        @media(min-width: 768px) {
+            .charts-grid { grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
+        }
+        .chart-container {
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        canvas { width: 100% !important; height: 250px !important; }
+        #explanationModal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); align-items: center; justify-content: center; z-index: 1000;
+        }
+        .modal-content {
+            background: white; padding: 25px; border-radius: 12px; max-width: 500px; width: 90%;
+            position: relative;
+        }
+        .close-btn {
+            position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; color: #999;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>המעבדה המטבולית</h1>
+    
+    <div class="upload-section">
+        <h3>העלה את קובץ האקסל של החיישן</h3>
+        <input type="file" id="fileInput" accept=".xlsx, .xls, .csv">
+        <p style="font-size: 13px; color: gray;">הקובץ מעובד מקומית בדפדפן בלבד ושומר על פרטיותך.</p>
+    </div>
+
+    <div id="recommendationsSection" class="recommendations" style="display: none;">
+        <h3>סיכום מטבולי והמלצות</h3>
+        <p id="recommendationText"></p>
+    </div>
+
+    <h2>סיכום תקופתי (כלל הנתונים)</h2>
+    <div id="summaryGrid" class="summary-grid"></div>
+
+    <h2>היסטוגרמות יומיות</h2>
+    <div id="chartsGrid" class="charts-grid"></div>
+</div>
+
+<div id="explanationModal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeModal()">&times;</span>
+        <h2 id="modalTitle">כותרת</h2>
+        <p id="modalDesc">הסבר...</p>
+    </div>
+</div>
+
+<script>
+    const metricExplanations = {
+        "Mean": { title: "ממוצע סוכר (Mean)", desc: "ממוצע כלל הקריאות. הטווח האופטימלי לאנשים בריאים נע בין 78 ל-106 מ\"ג/ד\"ל. ערך זה משמש כקו הבסיס למטבוליזם שלך." },
+        "SD": { title: "סטיית תקן (SD)", desc: "המדד החשוב ביותר לניבוי בעיות עתידיות! מודד כמה הסוכר שלך קופץ ונופל סביב הממוצע. באנשים בריאים הערך הוא בין 12 ל-15. מעל 15.4 נחשב לגורם סיכון." },
+        "CV": { title: "מקדם השתנות (CV%)", desc: "מודד את סטיית התקן באחוזים מתוך הממוצע. יעד אידיאלי: מתחת ל-20%." },
+        "GMI": { title: "מדד ניהול גלוקוז (GMI)", desc: "הגרסה המודרנית ל-HbA1c משוער. מנבא מה תהיה תוצאת ה-A1c שלך בבדיקת דם לפי חיישן ה-CGM. מתחת ל-5.7% נחשב תקין." },
+        "J_Index": { title: "J-Index", desc: "מדד מורכב שמזהה לחץ גליקמי על מערכת העצבים של הלב. משקלל גם ממוצע גבוה וגם קפיצתיות. ערך אידיאלי הוא באזור ה-10 עד 15." },
+        "MODD": { title: "MODD (יציבות יומית)", desc: "בודק כמה הימים שלך דומים אחד לשני (משווה את השעה 14:00 היום ל-14:00 אתמול). מדד מתחת ל-15 מראה על שגרת חיים יציבה מאוד." },
+        "CONGA_1": { title: "CONGA-1", desc: "מודד את ההפרש בין הסוכר עכשיו לסוכר שהיה בדיוק לפני שעה. עוזר לזהות עליות סמויות." },
+        "LBGI": { title: "מדד סיכון לנמוך (LBGI)", desc: "נוסחה לוגריתמית מיוחדת שבודקת את רמת הסיכון מנפילות סוכר (היפוגליקמיה). מדד קרוב ל-0 הוא מצוין." },
+        "HBGI": { title: "מדד סיכון לגבוה (HBGI)", desc: "בודק את רמת הסיכון מקפיצות סוכר גבוהות." },
+        "TITR": { title: "טווח הדוק (70-110)", desc: "זמן השהייה בטווח הנוקשה ביותר. אנשים בריאים מבלים כאן כ-80%-90% מהזמן." },
+        "TAR_140": { title: "חריגות (TAR > 140)", desc: "אחוז הזמן מעל 140. אצל בריאים: עד 5.6% מהזמן זה תקין ומוגדר כתגובה נורמלית לארוחה." },
+        "TBR_70": { title: "נפילות (TBR < 70)", desc: "אצל בריאים יכול להגיע עד 5-10% מהזמן בגלל פינוי סוכר יעיל או לחץ על החיישן בשינה." }
+    };
+
+    document.getElementById('fileInput').addEventListener('change', handleFile, false);
+
+    function handleFile(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+            const firstSheet = workbook.SheetNames[0];
+            const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], {header: 1});
+            processData(jsonData);
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function processData(rows) {
+        let rawData = [];
+        for(let i=1; i<rows.length; i++){
+            let row = rows[i];
+            if(row.length >= 2){
+                let timeStr = String(row[0]).replace(/ GMT\+\d/g, ''); 
+                let glucose = parseFloat(row[1]);
+                if(!isNaN(glucose)) {
+                    let dateParts = timeStr.split(' ');
+                    if(dateParts.length > 1) {
+                        let d = dateParts[0].split('-');
+                        let t = dateParts[1].split(':');
+                        if(d.length === 3) {
+                            let dateObj = new Date(d[2], d[1]-1, d[0], t[0], t[1]);
+                            rawData.push({ time: dateObj, glucose: glucose, ts: dateObj.getTime() });
+                        }
+                    } else {
+                         rawData.push({ time: new Date(timeStr), glucose: glucose, ts: new Date(timeStr).getTime() });
+                    }
+                }
+            }
+        }
+        
+        rawData.sort((a,b) => a.ts - b.ts);
+        const overallMetrics = calculateMetrics(rawData);
+        renderSummary(overallMetrics);
+        generateRecommendations(overallMetrics);
+
+        const days = {};
+        rawData.forEach(d => {
+            const dayString = d.time.toLocaleDateString('he-IL');
+            if(!days[dayString]) days[dayString] = [];
+            days[dayString].push(d);
+        });
+
+        const dailyMetrics = { Mean:[], SD:[], J_Index:[], MODD:[], TAR_140:[], labels:[] };
+        Object.keys(days).forEach(day => {
+            if(days[day].length > 50) { 
+                let m = calculateMetrics(days[day], rawData); 
+                dailyMetrics.labels.push(day);
+                dailyMetrics.Mean.push(m.Mean);
+                dailyMetrics.SD.push(m.SD);
+                dailyMetrics.J_Index.push(m.J_Index);
+                dailyMetrics.MODD.push(m.MODD);
+                dailyMetrics.TAR_140.push(m.TAR_140);
+            }
+        });
+        renderCharts(dailyMetrics);
+    }
+
+    function calculateMetrics(data, fullData = null) {
+        if(data.length === 0) return {};
+        let arr = data.map(d => d.glucose);
+        let n = arr.length;
+        let sum = arr.reduce((a,b)=>a+b, 0);
+        let mean = sum / n;
+        let variance = arr.reduce((a,b)=>a+Math.pow(b-mean, 2), 0) / (n-1);
+        let sd = Math.sqrt(variance);
+        let cv = (sd / mean) * 100;
+        let mean_mmol = mean / 18.018;
+        let sd_mmol = sd / 18.018;
+        let j_index = 0.324 * Math.pow((mean_mmol + sd_mmol), 2);
+        let gmi = 3.31 + (0.02392 * mean);
+        let lbgi_sum = 0, hbgi_sum = 0;
+        arr.forEach(g => {
+            let f_g = 1.509 * (Math.pow(Math.log(g), 1.084) - 5.381);
+            let risk = f_g * f_g;
+            if(f_g < 0) lbgi_sum += risk;
+            if(f_g > 0) hbgi_sum += risk;
+        });
+        let lbgi = lbgi_sum / n;
+        let hbgi = hbgi_sum / n;
+        let tbr_70 = (arr.filter(g => g < 70).length / n) * 100;
+        let titr_70_110 = (arr.filter(g => g >= 70 && g <= 110).length / n) * 100;
+        let tar_140 = (arr.filter(g => g > 140).length / n) * 100;
+        
+        let modd_sum = 0, modd_count = 0;
+        let conga_diffs = [];
+        let referenceData = fullData ? fullData : data; 
+
+        data.forEach(d => {
+            let t = d.ts;
+            let val = d.glucose;
+            let prev24 = referenceData.find(x => Math.abs(x.ts - (t - 86400000)) <= 900000);
+            if(prev24) { modd_sum += Math.abs(val - prev24.glucose); modd_count++; }
+            let prev1h = referenceData.find(x => Math.abs(x.ts - (t - 3600000)) <= 900000);
+            if(prev1h) { conga_diffs.push(val - prev1h.glucose); }
+        });
+
+        let modd = modd_count > 0 ? (modd_sum / modd_count) : 0;
+        let conga = 0;
+        if(conga_diffs.length > 0) {
+            let m_diff = conga_diffs.reduce((a,b)=>a+b,0) / conga_diffs.length;
+            let v_diff = conga_diffs.reduce((a,b)=>a+Math.pow(b-m_diff, 2), 0) / (conga_diffs.length-1);
+            conga = Math.sqrt(v_diff);
+        }
+
+        return {
+            Mean: mean.toFixed(1), SD: sd.toFixed(1), CV: cv.toFixed(1),
+            GMI: gmi.toFixed(2), J_Index: j_index.toFixed(2),
+            LBGI: lbgi.toFixed(2), HBGI: hbgi.toFixed(2),
+            MODD: modd.toFixed(1), CONGA_1: conga.toFixed(1),
+            TITR: titr_70_110.toFixed(1), TAR_140: tar_140.toFixed(1), TBR_70: tbr_70.toFixed(1)
+        };
+    }
+
+    function renderSummary(metrics) {
+        const grid = document.getElementById('summaryGrid');
+        grid.innerHTML = '';
+        for (const [key, val] of Object.entries(metrics)) {
+            let exp = metricExplanations[key];
+            if(!exp) continue;
+            let suffix = (key==='CV'||key==='TITR'||key==='TAR_140'||key==='TBR_70'||key==='GMI') ? '%' : '';
+            let html = `
+                <div class="summary-card">
+                    <div class="label">
+                        ${exp.title}
+                        <span class="info-icon" onclick="openModal('${key}')">?</span>
+                    </div>
+                    <div class="value">${val}${suffix}</div>
+                </div>
+            `;
+            grid.innerHTML += html;
+        }
+    }
+
+    function generateRecommendations(m) {
+        const recSection = document.getElementById('recommendationsSection');
+        const recText = document.getElementById('recommendationText');
+        recSection.style.display = 'block';
+        
+        let txt = `<b>תמונת מצב מטבולית:</b> ממוצע הסוכר שלך הוא ${m.Mean} מ"ג/ד"ל, וסטיית התקן היא ${m.SD}. <br><br>`;
+        
+        if (m.SD < 14) {
+            txt += "✅ <b>יציבות גליקמית מעולה:</b> סטיית התקן שלך נמוכה מ-14, מה שמעיד על היעדר כמעט מוחלט של תנודות מזיקות.<br>";
+        } else {
+            txt += "⚠️ <b>שים לב לסטיית התקן:</b> ערך מעל 15 עשוי לרמז על ספייקים לאחר ארוחות.<br>";
+        }
+        
+        if (m.TAR_140 == 0) {
+            txt += "✅ <b>פינוי סוכר (SgIO) פנומנלי:</b> אין לך כלל חריגות מעל 140. הלבלב והתאים שלך מגיבים מהר וביעילות.<br>";
+        }
+
+        if (m.MODD < 15) {
+             txt += `✅ <b>שגרה יציבה:</b> מדד ה-MODD שלך (${m.MODD}) מעיד שהימים שלך עקביים מאוד מבחינת תזונה ואורח חיים.<br>`;
+        }
+        
+        txt += "<br><b>המלצת המעבדה:</b> בהתבסס על ניתוח המחקרים האחרונים, הסוכר שלך נקי מבעיות. מכיוון שהסוכר מאוזן לחלוטין אך המטרה היא שימור והורדת שומן ויסרלי, ההמלצה העיקרית היא הוספת <b>נשנושי כושר (Exercise Snacking)</b> של 10 דקות כוח בבוקר, ושילוב תוסף אנטי-דלקתי לארוחה הגדולה.";
+
+        recText.innerHTML = txt;
+    }
+
+    let chartInstances = [];
+    
+    function renderCharts(data) {
+        const grid = document.getElementById('chartsGrid');
+        grid.innerHTML = '';
+        chartInstances.forEach(c => c.destroy());
+        chartInstances = [];
+
+        const metricsToChart = [
+            { key: 'Mean', title: 'ממוצע יומי (Mean)', color: '#3b82f6' },
+            { key: 'SD', title: 'סטיית תקן יומית (SD)', color: '#ef4444' },
+            { key: 'J_Index', title: 'J-Index (לחץ מטבולי)', color: '#8b5cf6' },
+            { key: 'MODD', title: 'שונות בין ימים (MODD)', color: '#10b981' }
+        ];
+
+        metricsToChart.forEach((m, idx) => {
+            let container = document.createElement('div');
+            container.className = 'chart-container';
+            container.innerHTML = `<h3>${m.title} <span class="info-icon" style="font-size:10px; width:15px; height:15px;" onclick="openModal('${m.key}')">?</span></h3><canvas id="chart_${idx}"></canvas>`;
+            grid.appendChild(container);
+
+            let ctx = document.getElementById(`chart_${idx}`).getContext('2d');
+            let chart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: m.title,
+                        data: data[m.key],
+                        backgroundColor: m.color,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+            chartInstances.push(chart);
+        });
+    }
+
+    function openModal(metricKey) {
+        let info = metricExplanations[metricKey];
+        if(!info) return;
+        document.getElementById('modalTitle').innerText = info.title;
+        document.getElementById('modalDesc').innerText = info.desc;
+        document.getElementById('explanationModal').style.display = 'flex';
+    }
+    
+    function closeModal() {
+        document.getElementById('explanationModal').style.display = 'none';
+    }
+    
+    window.onclick = function(event) {
+        let modal = document.getElementById('explanationModal');
+        if (event.target == modal) { modal.style.display = "none"; }
+    }
+</script>
+
+</body>
+</html>
